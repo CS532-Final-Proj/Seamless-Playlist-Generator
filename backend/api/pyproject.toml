@@ -5,8 +5,14 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "boto3>=1.40.64",
     "celery>=5.5.3",
     "fastapi[standard]>=0.120.4",
+    "minio>=7.2.18",
+    "requests>=2.32.5",
     "sqlalchemy>=2.0.44",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.3",
 ]
