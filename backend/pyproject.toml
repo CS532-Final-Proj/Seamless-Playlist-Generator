@@ -1,11 +1,11 @@
 [project]
-name = "api"
+name = "backend"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "celery>=5.5.3",
+    "celery[redis]>=5.5.3",
     "fastapi[standard]>=0.120.4",
     "minio>=7.2.18",
     "requests>=2.32.5",
