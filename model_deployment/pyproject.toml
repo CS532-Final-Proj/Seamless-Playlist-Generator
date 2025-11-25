@@ -1,0 +1,23 @@
+[project]
+name = "model-deployment"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "essentia>=2.1b6.dev1389",
+    "fastapi>=0.122.0",
+    "numpy>=2.2.6",
+    "psycopg[binary]>=3.2.13",
+    "pydantic>=2.12.4",
+    "pyspark>=4.0.1",
+    "requests>=2.32.5",
+    "uvicorn>=0.38.0",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["train", "inference", "common"]
