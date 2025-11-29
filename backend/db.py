@@ -1,10 +1,16 @@
 import os
 from typing import List
 
-from sqlalchemy import UUID, ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import UUID, ForeignKey, Integer, UniqueConstraint, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Mapped, mapped_column, relationship, sessionmaker
+from sqlalchemy.orm import (
+    Mapped,
+    mapped_column,
+    relationship,
+    sessionmaker,
+    selectinload,
+)
 
 # Database URL from environment
 DATABASE_URL = os.getenv("POSTGRES_URL")
@@ -40,7 +46,7 @@ class Playlist(Base):
 
     id: Mapped[str] = mapped_column(primary_key=True, type_=UUID)
 
-    tracks: Mapped[List["PlaylistTrack"]] = relationship()
+    tracks: Mapped[List["PlaylistTrack"]] = relationship(order_by="PlaylistTrack.order")
 
     def __repr__(self):
         return f"<Playlist(id={self.id})>"
@@ -81,5 +87,10 @@ async def get_db():
 async def get_playlist_by_id(
     session: AsyncSession, playlist_id: str
 ) -> Playlist | None:
-    result = await session.get(Playlist, playlist_id)
-    return result
+    stmt = (
+        select(Playlist)
+        .where(Playlist.id == playlist_id)
+        .options(selectinload(Playlist.tracks).joinedload(PlaylistTrack.track))
+    )
+    result = await session.execute(stmt)
+    return result.scalars().first()
