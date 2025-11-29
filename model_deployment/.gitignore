@@ -1,3 +1,2 @@
 model.env
-data/**/*.parquet
-data/**/*.crc
+data/

@@ -1,17 +1,24 @@
 import os
-import tempfile
-from pathlib import Path
+import sys
+import concurrent.futures
+import pebble
 
-import essentia.standard as es
 import psycopg
-import requests
 from pyspark.ml import Pipeline
-from pyspark.ml.feature import PCA, StandardScaler, Normalizer
+from pyspark.ml.feature import PCA, Normalizer, StandardScaler
 from pyspark.ml.functions import array_to_vector
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, expr
+from pyspark.sql.functions import col
+from pyspark.sql.types import (
+    ArrayType,
+    FloatType,
+    IntegerType,
+    StringType,
+    StructField,
+    StructType,
+)
 
-from common import get_essentia_algos, _extract_features_from_signal, feature_schema
+from common import init_worker, safe_extract_worker
 
 # Configuration from environment
 POSTGRES_URL = os.getenv(
@@ -26,94 +33,93 @@ MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "embeddings")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
-# Source S3/Rclone Configuration (Optional - for Hadoop/S3A access)
-SOURCE_ENDPOINT = os.getenv("SOURCE_ENDPOINT")  # e.g., "localhost:8081"
-SOURCE_ACCESS_KEY = os.getenv("SOURCE_ACCESS_KEY", "minioadmin")
-SOURCE_SECRET_KEY = os.getenv("SOURCE_SECRET_KEY", "minioadmin")
-SOURCE_BUCKET = os.getenv("SOURCE_BUCKET", "music-data")
-
 TRACK_LIMIT = int(os.getenv("TRACK_LIMIT", "0"))  # 0 means no limit
-FEATURES_CACHE_PATH = os.getenv("FEATURES_CACHE_PATH", "data/features.parquet")
+FEATURES_CACHE_PATH = os.getenv("FEATURES_CACHE_PATH", "data/features")
+FAILED_TRACKS_PATH = os.getenv("FAILED_TRACKS_PATH", "data/failed_tracks")
+
+processing_schema = StructType(
+    [
+        StructField("track_id", IntegerType(), False),
+        StructField("features", ArrayType(FloatType()), True),
+        StructField("error", StringType(), True),
+    ]
+)
 
 
-def process_partition_s3(iterator):
-    """Process a partition of audio bytes (S3/Hadoop)."""
-    algos = get_essentia_algos()
-
-    for row in iterator:
-        track_id = row.id
-        audio_bytes = row.content
-
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_mp3:
-                tmp_mp3.write(audio_bytes)
-                mp3_path = tmp_mp3.name
-
-            try:
-                # Load and standardize
-                y = es.MonoLoader(filename=mp3_path, sampleRate=22050)()
-
-                # Trim
-                sr = 22050
-                duration_samples = len(y)
-                target_samples = 30 * sr
-                if duration_samples > target_samples:
-                    mid = duration_samples // 2
-                    start = mid - (target_samples // 2)
-                    end = start + target_samples
-                    y = y[start:end]
-
-                # Extract
-                result = _extract_features_from_signal(track_id, y, algos)
-                yield result
-
-            finally:
-                Path(mp3_path).unlink(missing_ok=True)
-
-        except Exception as e:
-            print(f"[ERROR] Failed to process track {track_id}: {e}")
-            continue
+def log(msg):
+    """Log message to stdout for Spark executor visibility."""
+    sys.stdout.write(f"[Executor] {msg}\n")
+    sys.stdout.flush()
 
 
-def process_partition_http(iterator):
-    """Process a partition of audio URLs (HTTP)."""
-    algos = get_essentia_algos()
-    session = requests.Session()
+def process_partition_audio(iterator):
+    """Process a partition of audio bytes sequentially reusing Essentia algos."""
 
-    for row in iterator:
-        track_id = row.id
-        location = row.location
+    log("Starting process_partition_audio")
 
-        try:
-            mp3_url = f"{FILE_SERVER_URL}/{location}"
-            response = session.get(mp3_url, timeout=30)
-            response.raise_for_status()
+    try:
+        # Use a persistent pool for this partition to isolate Essentia
+        # max_tasks=50 restarts the worker periodically to clear memory leaks
+        with pebble.ProcessPool(
+            max_workers=1, max_tasks=50, initializer=init_worker
+        ) as pool:
+            count = 0
+            for row in iterator:
+                count += 1
+                track_id = row.track_id
+                audio_path = row.audio
+                error = row.error
 
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_mp3:
-                tmp_mp3.write(response.content)
-                mp3_path = tmp_mp3.name
+                log(f"Processing track {track_id}, path: {audio_path}, error: {error}")
 
-            try:
-                y = es.MonoLoader(filename=mp3_path, sampleRate=22050)()
+                if error:
+                    print(f"[WARNING] Upstream error for {track_id}: {error}")
+                    yield {"track_id": track_id, "features": None, "error": error}
+                    continue
 
-                sr = 22050
-                duration_samples = len(y)
-                target_samples = 30 * sr
-                if duration_samples > target_samples:
-                    mid = duration_samples // 2
-                    start = mid - (target_samples // 2)
-                    end = start + target_samples
-                    y = y[start:end]
+                if not audio_path:
+                    yield {
+                        "track_id": track_id,
+                        "features": None,
+                        "error": "Empty audio",
+                    }
+                    continue
 
-                result = _extract_features_from_signal(track_id, y, algos)
-                yield result
+                try:
+                    # Extract (in child process)
+                    future = pool.schedule(
+                        safe_extract_worker, args=[track_id, audio_path], timeout=60
+                    )
 
-            finally:
-                Path(mp3_path).unlink(missing_ok=True)
+                    try:
+                        feat_result = future.result()
+                        feat_result["error"] = None
+                        yield feat_result
+                    except pebble.ProcessExpired:
+                        print(f"[FATAL] Worker segfaulted on {track_id}")
+                        yield {
+                            "track_id": track_id,
+                            "features": None,
+                            "error": "Worker Segfault",
+                        }
+                    except concurrent.futures.TimeoutError:
+                        print(f"[ERROR] Timeout processing {track_id}")
+                        yield {
+                            "track_id": track_id,
+                            "features": None,
+                            "error": "Timeout",
+                        }
+                    except Exception as e:
+                        print(f"[ERROR] Worker exception for {track_id}: {e}")
+                        yield {"track_id": track_id, "features": None, "error": str(e)}
 
-        except Exception as e:
-            print(f"[ERROR] Failed to process track {track_id}: {e}")
-            continue
+                except Exception as e:
+                    print(f"[ERROR] System failed for {track_id}: {e}")
+                    yield {"track_id": track_id, "features": None, "error": str(e)}
+
+            log(f"Finished processing partition. Total rows: {count}")
+    finally:
+        pass
 
 
 def init_database_pre_load() -> bool:
@@ -159,8 +165,8 @@ def finalize_database_post_load() -> bool:
             with conn.cursor() as cur:
                 print("   Creating HNSW index for vector similarity search...")
                 cur.execute("""
-                    CREATE INDEX IF NOT EXISTS track_embeddings_embedding_idx 
-                    ON track_embeddings 
+                    CREATE INDEX IF NOT EXISTS track_embeddings_embedding_idx
+                    ON track_embeddings
                     USING hnsw (embedding vector_cosine_ops);
                 """)
                 conn.commit()
@@ -181,6 +187,7 @@ def main():
     spark = (
         SparkSession.builder.appName("MusicEmbeddingGenerator")
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
+        .config("spark.scheduler.mode", "FAIR")  # Enable concurrent job execution
         .getOrCreate()
     )
 
@@ -198,154 +205,137 @@ def main():
     hadoop_conf.set("fs.s3a.endpoint.region", "garage")
     hadoop_conf.set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
 
-    # Configure Source S3/Rclone if provided (Per-bucket configuration)
-    if SOURCE_ENDPOINT:
-        print(
-            f"\n[INFO] Configuring Source S3/Rclone bucket: {SOURCE_BUCKET} at {SOURCE_ENDPOINT}"
-        )
-        hadoop_conf.set(
-            f"fs.s3a.bucket.{SOURCE_BUCKET}.endpoint", f"http://{SOURCE_ENDPOINT}"
-        )
-        hadoop_conf.set(f"fs.s3a.bucket.{SOURCE_BUCKET}.access.key", SOURCE_ACCESS_KEY)
-        hadoop_conf.set(f"fs.s3a.bucket.{SOURCE_BUCKET}.secret.key", SOURCE_SECRET_KEY)
-        hadoop_conf.set(f"fs.s3a.bucket.{SOURCE_BUCKET}.path.style.access", "true")
-        hadoop_conf.set(
-            f"fs.s3a.bucket.{SOURCE_BUCKET}.connection.ssl.enabled", "false"
-        )  # Rclone usually http
-
     print("\n[1/6] Initialized Spark Session with S3A support")
 
-    # Read tracks from Postgres
-    print("\n[2/6] Reading tracks from Postgres...")
-    jdbc_url = POSTGRES_URL.replace("postgresql://", "jdbc:postgresql://")
+    # ---------------------------------------------------------
+    # Step 2: Identify Delta (Incremental Update)
+    # ---------------------------------------------------------
+    print("\n[2/6] Identifying tracks to process (Delta)...")
 
-    # Optimization: Read in parallel using partitionColumn
-    # 1. Get min/max ID to define partition bounds
-    bounds_df = (
+    # 1. Read track metadata from Postgres (JDBC)
+    jdbc_url = POSTGRES_URL.replace("postgresql://", "jdbc:postgresql://")
+    metadata_df = (
         spark.read.format("jdbc")
         .option("url", jdbc_url)
-        .option(
-            "dbtable",
-            "(SELECT min(id) as min_id, max(id) as max_id FROM tracks) as tmp",
-        )
+        .option("dbtable", "tracks")
         .option("driver", "org.postgresql.Driver")
         .load()
+        .select("id")
+        .withColumnRenamed("id", "track_id")
     )
 
-    tracks_df = None
-    if bounds_df.count() > 0:
-        row = bounds_df.first()
-        min_id, max_id = row["min_id"], row["max_id"]
-
-        if min_id is not None and max_id is not None:
-            print(
-                f"   Reading tracks with partitions: min_id={min_id}, max_id={max_id}, partitions=20"
-            )
-            tracks_df = (
-                spark.read.format("jdbc")
-                .option("url", jdbc_url)
-                .option("driver", "org.postgresql.Driver")
-                .option("dbtable", "tracks")
-                .option("partitionColumn", "id")
-                .option("lowerBound", min_id)
-                .option("upperBound", max_id)
-                .option("numPartitions", 20)
-                .load()
-            )
-
-    # Fallback if table is empty or bounds failed
-    if tracks_df is None:
-        tracks_df = (
-            spark.read.format("jdbc")
-            .option("url", jdbc_url)
-            .option("driver", "org.postgresql.Driver")
-            .option("dbtable", "tracks")
-            .load()
-        )
-
-    track_count = tracks_df.count()
-    print(f"   Loaded {track_count} tracks from database")
-
-    if track_count == 0:
-        print("   No tracks to process. Exiting.")
-        spark.stop()
-        return
+    total_tracks = metadata_df.count()
+    print(f"   Total tracks in DB: {total_tracks}")
 
     if TRACK_LIMIT > 0:
-        tracks_df = tracks_df.limit(TRACK_LIMIT)
-        print(f"   Limiting to first {TRACK_LIMIT} tracks for processing")
+        metadata_df = metadata_df.limit(TRACK_LIMIT)
+        print(f"   Limiting to first {TRACK_LIMIT} tracks")
 
-    # Select required columns
-    tracks_df = tracks_df.select("id", "location")
+    # 2. Load existing features
+    existing_features_df = None
+    if os.path.exists(FEATURES_CACHE_PATH) and (
+        os.path.isdir(FEATURES_CACHE_PATH) and len(os.listdir(FEATURES_CACHE_PATH)) > 0
+    ):
+        print(f"   Loading existing features from {FEATURES_CACHE_PATH}...")
+        try:
+            existing_features_df = spark.read.parquet(FEATURES_CACHE_PATH)
+            print(f"   Found {existing_features_df.count()} existing feature records.")
+        except Exception as e:
+            print(f"   [WARNING] Failed to read existing cache: {e}")
+            existing_features_df = None
 
-    # Check for cached features to avoid re-running expensive extraction
-    if os.path.exists(FEATURES_CACHE_PATH):
-        print(f"\n[3/6] Loading cached features from {FEATURES_CACHE_PATH}...")
-        features_df = spark.read.parquet(FEATURES_CACHE_PATH)
+    # 3. Calculate Delta
+    if existing_features_df is not None:
+        tracks_to_process_df = metadata_df.join(
+            existing_features_df,
+            metadata_df.track_id == existing_features_df.track_id,
+            how="left_anti",
+        )
     else:
-        print("\n[3/6] Extracting audio features...")
+        tracks_to_process_df = metadata_df
 
-        if SOURCE_ENDPOINT:
-            print(
-                f"   Using Hadoop S3A to read audio files from s3a://{SOURCE_BUCKET}/"
-            )
+    count_to_process = tracks_to_process_df.count()
+    print(f"   Tracks to process (Delta): {count_to_process}")
 
-            # Optimization: If we have a limited set of tracks, pass specific paths to avoid scanning the whole bucket
-            # This prevents reading content of files we don't need.
-            use_specific_paths = track_count < 10000
+    # ---------------------------------------------------------
+    # Step 3: Process Audio (Load & Extract)
+    # ---------------------------------------------------------
+    if count_to_process > 0:
+        print(f"\n[3/6] Processing {count_to_process} tracks...")
 
-            if use_specific_paths:
-                print(
-                    f"   [Optimization] Track count is small ({track_count}). Reading specific files only."
-                )
-                locations = [
-                    row.location for row in tracks_df.select("location").collect()
-                ]
-                file_paths = [f"s3a://{SOURCE_BUCKET}/{loc}" for loc in locations]
+        # Use Spark's binaryFile format to list files, but only select the path
+        # This avoids reading the file content into memory
+        AUDIO_MOUNT_PATH = os.getenv("AUDIO_MOUNT_PATH", "/opt/spark/data/tracks")
 
-                # ignoreMissingFiles ensures we don't crash if DB has a file that S3 doesn't
-                audio_df = (
-                    spark.read.format("binaryFile")
-                    .option("ignoreMissingFiles", "true")
-                    .load(file_paths)
-                )
-            else:
-                # Read all audio files from the source bucket
-                audio_df = (
-                    spark.read.format("binaryFile")
-                    .option("pathGlobFilter", "*.mp3")
-                    .option("recursiveFileLookup", "true")
-                    .load(f"s3a://{SOURCE_BUCKET}/")
-                )
+        print(f"   Scanning audio files in {AUDIO_MOUNT_PATH}...")
 
-            # Create a 'location' column in audio_df by stripping the prefix
-            prefix = f"s3a://{SOURCE_BUCKET}/"
-            audio_df = audio_df.withColumn(
-                "location", expr(f"substring(path, {len(prefix) + 1}, length(path))")
-            )
+        # Read file paths
+        # pathGlobFilter ensures we only look at mp3s
+        # recursiveFileLookup allows nested folders if needed
+        audio_files_df = (
+            spark.read.format("binaryFile")
+            .option("pathGlobFilter", "*.mp3")
+            .option("recursiveFileLookup", "true")
+            .load(AUDIO_MOUNT_PATH)
+            .select("path")
+        )
 
-            from pyspark.sql.functions import broadcast
+        # Extract track_id from path using regex
+        from pyspark.sql.functions import regexp_extract
 
-            joined_df = audio_df.join(broadcast(tracks_df), "location")
+        # Regex to find digits before .mp3 at the end of path, preceded by a slash
+        # Example: /opt/data/tracks/000/000536.mp3 -> 000536
+        audio_df = audio_files_df.withColumn(
+            "track_id",
+            regexp_extract(col("path"), r"/(\d+)\.mp3$", 1).cast(IntegerType()),
+        ).withColumnRenamed(
+            "path", "audio"
+        )  # Rename path to audio to match expected schema
 
-            # Optimization: Use mapPartitions to amortize Essentia initialization cost
-            # and avoid intermediate WAV writes.
-            features_rdd = joined_df.rdd.mapPartitions(process_partition_s3)
-            features_df = spark.createDataFrame(features_rdd, schema=feature_schema)
+        # Filter to only include tracks we need to process (Delta)
+        # Join with tracks_to_process_df
+        processing_df = audio_df.join(tracks_to_process_df, "track_id", "inner")
 
-        else:
-            if tracks_df.rdd.getNumPartitions() < 20:
-                tracks_df = tracks_df.repartition(20)
+        # Add empty error column to match schema expected by process_partition_audio
+        from pyspark.sql.functions import lit
 
-            features_rdd = tracks_df.rdd.mapPartitions(process_partition_http)
-            features_df = spark.createDataFrame(features_rdd, schema=feature_schema)
+        processing_df = processing_df.withColumn("error", lit(None).cast(StringType()))
 
-        # Save features to disk for future runs
-        print(f"   Saving extracted features to {FEATURES_CACHE_PATH}...")
-        features_df.write.mode("overwrite").parquet(FEATURES_CACHE_PATH)
+        # Repartition for concurrency
+        processing_df = processing_df.repartition(48)
 
-        # Reload from disk to break lineage and avoid re-computation
-        features_df = spark.read.parquet(FEATURES_CACHE_PATH)
+        features_rdd = processing_df.rdd.mapPartitions(process_partition_audio)
+        results_df = spark.createDataFrame(features_rdd, schema=processing_schema)
+
+        # Cache results
+        results_df.cache()
+
+        # Write success
+        success_df = results_df.filter(col("error").isNull()).select(
+            "track_id", "features"
+        )
+        success_df.write.mode("append").parquet(FEATURES_CACHE_PATH)
+
+        # Write failure
+        failed_df = results_df.filter(col("error").isNotNull()).select(
+            "track_id", "error"
+        )
+        if failed_df.count() > 0:
+            failed_df.write.mode("append").parquet(FAILED_TRACKS_PATH)
+
+        results_df.unpersist()
+        print("   [Done] Processing complete.")
+
+    else:
+        print("   No new tracks to process. Using existing cache.")
+
+    # 4. Final Load for Training
+    print(f"   Reloading all features from {FEATURES_CACHE_PATH} for training...")
+    features_df = spark.read.parquet(FEATURES_CACHE_PATH)
+
+    if TRACK_LIMIT > 0:
+        print(f"   Enforcing track limit of {TRACK_LIMIT} on training data...")
+        features_df = features_df.limit(TRACK_LIMIT)
 
     features_df.cache()
 
@@ -366,7 +356,9 @@ def main():
 
     features_df = features_df.withColumn(
         "feature_vector",
-        array_to_vector(col("features")).alias("feature_vector", metadata={"numFeatures": num_features}),
+        array_to_vector(col("features")).alias(
+            "feature_vector", metadata={"numFeatures": num_features}
+        ),
     )
 
     # Build Spark ML Pipeline
@@ -409,6 +401,8 @@ def main():
     # Write to PostgreSQL if ready
     if postgres_ready:
         print("\n[5/7] Writing embeddings to PostgreSQL...")
+
+        jdbc_url = POSTGRES_URL.replace("postgresql://", "jdbc:postgresql://")
 
         try:
             # Write to PostgreSQL with pgvector using native Spark JDBC
@@ -454,6 +448,8 @@ def main():
         print("\n" + "=" * 80)
         print("✓ Embedding Model Generation Complete!")
         print("=" * 80)
+        print("Used number of tracks:", feature_count)
+        print("\nArtifacts Summary:")
         print("\nEmbeddings written to PostgreSQL table: track_embeddings")
         print(f"\nModel artifacts saved to MinIO bucket: {MINIO_BUCKET}")
         print("  - spark_ml_model/ (Spark ML Pipeline)")

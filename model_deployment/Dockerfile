@@ -20,7 +20,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install -r pyproject.toml
 
 # Copy source code
-COPY main.py common.py train.py ./
+COPY train.py common.py inference.py ./
 
 # Build the project wheel
 RUN uv build
@@ -34,6 +34,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM apache/spark:4.0.1-java21-python3
 
 USER root
+
+# Install ffmpeg for Essentia to handle audio files robustly
+RUN apt-get update && \
+    apt-get install -y ffmpeg && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Define spark_uid variable (default in apache/spark images is 185)
 ARG spark_uid=185
@@ -52,9 +58,9 @@ RUN ln -sf /usr/bin/python3 $VIRTUAL_ENV/bin/python && \
 RUN PYTHON_VERSION=$(ls $VIRTUAL_ENV/lib | grep python) && \
     echo "export PYTHONPATH=\"$VIRTUAL_ENV/lib/${PYTHON_VERSION}/site-packages:\$PYTHONPATH\"" > /etc/profile.d/spark-venv.sh
 
-# Symlink the installed main.py to the expected work directory
+# Symlink the installed scripts to the expected work directory
 RUN PYTHON_VERSION=$(ls $VIRTUAL_ENV/lib | grep python) && \
-    ln -s $VIRTUAL_ENV/lib/${PYTHON_VERSION}/site-packages/main.py /opt/spark/work-dir/main.py
+    ln -s $VIRTUAL_ENV/lib/${PYTHON_VERSION}/site-packages/*.py /opt/spark/work-dir/
 
 # Download PostgreSQL JDBC driver
 ADD https://jdbc.postgresql.org/download/postgresql-42.7.3.jar /opt/spark/jars/
@@ -76,7 +82,7 @@ RUN mkdir -p ${SPARK_HOME} && mkdir -p ${SPARK_HOME}/spark-events
 WORKDIR ${SPARK_HOME}
 
 # Spark environment
-# 
+#
 ENV SPARK_MASTER_PORT=7077
 ENV SPARK_MASTER_HOST=spark-master
 ENV SPARK_MASTER="spark://$SPARK_MASTER_HOST:$SPARK_MASTER_PORT"

@@ -1,4 +1,18 @@
 services:
+  traefik:
+    image: traefik:v3.6.2
+    container_name: traefik
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "8000:80"
+      - "8001:8080"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+
   spark-master:
     container_name: spark-master
     build: .
@@ -37,18 +51,18 @@ services:
   model-api:
     image: spark-image
     deploy:
-      replicas: 1
-    entrypoint: ['./entrypoint.sh', 'jobserver']
-    depends_on:
-      - spark-master
+      replicas: 2
+    entrypoint: ['./entrypoint.sh', 'inference']
     env_file:
       - spark.env
       - model.env
     volumes:
       - ./data:/opt/spark/data
       - ./spark-logs:/opt/spark/spark-events
-    ports:
-      - '8000:8000'
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.model-api.rule=PathPrefix(`/`)"
+      - "traefik.http.services.model-api.loadbalancer.server.port=8000"
 
   spark-worker:
     container_name: spark-worker
@@ -62,6 +76,8 @@ services:
     volumes:
       - ./data:/opt/spark/data
       - ./spark-logs:/opt/spark/spark-events
+    ports:
+      - '8081:8081' # Spark worker Web UI
 
 volumes:
   spark-logs:

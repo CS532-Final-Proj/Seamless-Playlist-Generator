@@ -15,9 +15,9 @@ then
 elif [ "$SPARK_WORKLOAD" == "history" ]
 then
   start-history-server.sh
-elif [ "$SPARK_WORKLOAD" == "jobserver" ]
+elif [ "$SPARK_WORKLOAD" == "inference" ]
 then
-  echo "Starting Spark JobServer (Python Inference)..."
+  echo "Starting Spark Inference..."
   cd /opt/spark/work-dir
   exec uvicorn inference:app --host 0.0.0.0 --port 8000
 fi
