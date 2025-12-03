@@ -24,7 +24,7 @@ from common import init_worker, safe_extract_worker, feature_schema
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
-MINIO_BUCKET = os.getenv("MINIO_BUCKET", "embeddings")
+MINIO_BUCKET = os.getenv("MINIO_BUCKET", "embedding-model")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 FILE_SERVER_URL = os.getenv("FILE_SERVER_URL", "http://localhost:8080")
 
@@ -113,6 +113,8 @@ def health():
 def predict(request: PredictRequest):
     global model, pool
 
+    print(f"Received prediction request for location: {request.location}")
+
     if model is None:
         print("Model not loaded, attempting to reload...")
         try:
@@ -141,6 +143,7 @@ def predict(request: PredictRequest):
                         )
                     tmp_mp3.write(row["content"])
                 except Exception as e:
+                    print(f"Error loading from S3: {e}")
                     raise HTTPException(
                         status_code=400, detail=f"Failed to load from S3: {str(e)}"
                     )

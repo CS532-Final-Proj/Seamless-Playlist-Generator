@@ -1,17 +1,15 @@
 services:
-  traefik:
-    image: traefik:v3.6.2
-    container_name: traefik
-    command:
-      - "--api.insecure=true"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
+  nginx:
+    image: nginx:alpine
+    container_name: inference
     ports:
-      - "8000:80"
-      - "8001:8080"
+      - "8082:80"
     volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - model-api
+    networks:
+      - music-match
 
   spark-master:
     container_name: spark-master
@@ -30,9 +28,11 @@ services:
       - spark.env
       - model.env
     ports:
-      - '8080:8080' # Spark master Web UI
+      - '8083:8080' # Spark master Web UI
       - '7077:7077' # For spark-node-to-spark-node queries
       - '4040:4040' # Spark worker data
+    networks:
+      - music-match
 
   spark-history-server:
     container_name: spark-history
@@ -47,6 +47,8 @@ services:
       - ./spark-logs:/opt/spark/spark-events
     ports:
       - '18080:18080'
+    networks:
+      - music-match
 
   model-api:
     image: spark-image
@@ -59,10 +61,9 @@ services:
     volumes:
       - ./data:/opt/spark/data
       - ./spark-logs:/opt/spark/spark-events
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.model-api.rule=PathPrefix(`/`)"
-      - "traefik.http.services.model-api.loadbalancer.server.port=8000"
+    networks:
+      - music-match
+  
 
   spark-worker:
     container_name: spark-worker
@@ -77,7 +78,13 @@ services:
       - ./data:/opt/spark/data
       - ./spark-logs:/opt/spark/spark-events
     ports:
-      - '8081:8081' # Spark worker Web UI
+      - '8084:8081' # Spark worker Web UI
+    networks:
+      - music-match
 
 volumes:
   spark-logs:
+
+networks:
+  music-match:
+    driver: bridge

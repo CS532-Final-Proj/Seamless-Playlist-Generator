@@ -33,12 +33,11 @@ class Track(Base):
 
     id: Mapped[int] = mapped_column(Integer(), primary_key=True)
     title: Mapped[str] = mapped_column()
-    # artist: Mapped[str] = mapped_column()
-    # album: Mapped[str] = mapped_column()
     duration: Mapped[str] = mapped_column()
+    location: Mapped[str] = mapped_column()
 
     def __repr__(self):
-        return f"<Track(id={self.id}, title={self.title})>"
+        return f"<Track(id={self.id}, title={self.title}, duration={self.duration}, location={self.location})>"
 
 
 class Playlist(Base):

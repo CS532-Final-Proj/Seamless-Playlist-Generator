@@ -19,6 +19,9 @@ def run_process_upload(upload_id: str):
     logging.info(f"Processing upload: {upload_id}")
 
     # Get embedding from inference API
+    print(
+        f"Requesting embedding for upload {upload_id} from {INFERENCE_API_URL} with S3 path s3://{S3_BUCKET}/{upload_id}.mp3"
+    )
     try:
         response = requests.post(
             INFERENCE_API_URL,

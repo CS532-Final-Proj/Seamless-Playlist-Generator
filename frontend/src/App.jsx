@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import './App.css'
 
 function App() {
@@ -45,7 +45,7 @@ function App() {
     const poll = async () => {
       try {
         const response = await fetch(`/api/results/${uploadId}`)
-        
+
         if (!response.ok) {
           throw new Error('Failed to fetch results')
         }
@@ -95,7 +95,7 @@ function App() {
       }
 
       const data = await response.json()
-      
+
       // Start polling for results
       if (data.upload_id) {
         pollResults(data.upload_id)
@@ -113,6 +113,49 @@ function App() {
     setResults(null)
     setError(null)
   }
+
+  // Audio player state for single play and seek
+  const [playingIndex, setPlayingIndex] = useState(null);
+  const [seekTimes, setSeekTimes] = useState({});
+  const audioRefs = useRef([]);
+
+  const handlePlay = (index) => {
+    // Pause all other audios
+    audioRefs.current.forEach((audio, i) => {
+      if (audio && i !== index) {
+        audio.pause();
+        audio.currentTime = 0;
+      }
+    });
+    setPlayingIndex(index);
+    audioRefs.current[index].play();
+  };
+
+  const handlePause = (index) => {
+    setPlayingIndex(null);
+    audioRefs.current[index].pause();
+  };
+
+  const handleSeek = (index, value) => {
+    if (audioRefs.current[index]) {
+      audioRefs.current[index].currentTime = value;
+      setSeekTimes((prev) => ({ ...prev, [index]: value }));
+    }
+  };
+
+  const handleTimeUpdate = (index) => {
+    if (audioRefs.current[index]) {
+      setSeekTimes((prev) => ({ ...prev, [index]: audioRefs.current[index].currentTime }));
+    }
+  };
+
+  // Helper to format seconds as mm:ss
+  const formatDuration = (seconds) => {
+    if (!seconds || isNaN(seconds)) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
   if (loading) {
     return (
@@ -143,6 +186,38 @@ function App() {
                 <div className="similarity">
                   #{track.order + 1}
                 </div>
+                {track.audio_url && (
+                  <div className="track-audio">
+                    <button
+                      onClick={() =>
+                        playingIndex === index
+                          ? handlePause(index)
+                          : handlePlay(index)
+                      }
+                      style={{ marginRight: '10px' }}
+                    >
+                      {playingIndex === index ? 'Pause' : 'Play'}
+                    </button>
+                    <audio
+                      ref={(el) => (audioRefs.current[index] = el)}
+                      src={track.audio_url}
+                      onTimeUpdate={() => handleTimeUpdate(index)}
+                      onEnded={() => setPlayingIndex(null)}
+                      style={{ display: 'none' }}
+                    />
+                    <input
+                      type="range"
+                      min={0}
+                      max={audioRefs.current[index]?.duration || 0}
+                      value={seekTimes[index] || 0}
+                      onChange={(e) => handleSeek(index, Number(e.target.value))}
+                      style={{ width: '120px' }}
+                    />
+                    <span style={{ marginLeft: '8px', fontSize: '12px', color: '#666' }}>
+                      {formatDuration(seekTimes[index] || 0)} / {formatDuration(audioRefs.current[index]?.duration || 0)}
+                    </span>
+                  </div>
+                )}
               </div>
             ))
           )}
@@ -157,7 +232,7 @@ function App() {
   return (
     <div className="container">
       <h1>🎵 Seamless Playlist Generator</h1>
-      
+
       <div
         className={`upload-area ${dragOver ? 'dragover' : ''}`}
         onClick={() => document.getElementById('fileInput').click()}

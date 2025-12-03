@@ -169,3 +169,10 @@ h1 {
 .back-btn:hover {
   background: #e0e0e0;
 }
+
+.track-audio {
+  margin-left: 20px;
+  min-width: 180px;
+  display: flex;
+  align-items: center;
+}

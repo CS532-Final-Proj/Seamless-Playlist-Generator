@@ -1,28 +1,49 @@
 services:
   api:
+    container_name: api
     build:
       context: .
       dockerfile: Dockerfile.api
     ports:
-      - "8080:80"
+      - "8081:80"
     env_file:
       - api.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     networks:
-      - backend-network
+      - music-match
 
   worker:
+    deploy:
+      replicas: 2
     build:
       context: .
       dockerfile: Dockerfile.worker
     env_file:
       - worker.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     networks:
-      - backend-network
+      - music-match
+
+  postgres:
+    image: pgvector/pgvector:pg18
+    container_name: postgres
+    env_file:
+      - db.env
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg:/var/lib/postgresql
+    networks:
+      - music-match
+
+  valkey:
+    image: valkey/valkey:latest
+    container_name: valkey
+    ports:
+      - "6379:6379"
+    networks:
+      - music-match
 
 networks:
-  backend-network:
+  music-match:
     driver: bridge
+volumes:
+  pg:
