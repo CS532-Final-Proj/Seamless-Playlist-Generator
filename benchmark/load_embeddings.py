@@ -14,7 +14,7 @@ class TrackEmbedding(Base):
     __tablename__ = 'track_embedding'
     id = Column(Integer, primary_key=True)
     track_id = Column(String, unique=True)
-    embedding = Column(String)  
+    embedding = Column(String)  u
 
 DATABASE_URL = os.getenv("POSTGRES_URL")
 if not DATABASE_URL:

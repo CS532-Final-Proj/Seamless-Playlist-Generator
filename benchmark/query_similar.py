@@ -11,10 +11,7 @@ from sqlalchemy.schema import CreateTable
 import librosa
 import soundfile as sf
 import essentia.standard as es
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
 import joblib
-import sys
 
 # Load pre-trained scaler and PCA
 scaler = joblib.load("scaler.pkl")
@@ -26,13 +23,15 @@ if not DATABASE_URL:
     print("Error: POSTGRES_URL environment variable not set.")
     sys.exit(1)
 
+
 def standardize_audio(mp3_path, out_path):
     """Standardize MP3 to mono WAV at 22,050 Hz, middle 30 seconds."""
     y, sr = librosa.load(mp3_path, sr=22050, mono=True)
     mid = len(y) // 2
-    crop = y[mid - 15 * sr: mid + 15 * sr]
+    crop = y[mid - 15 * sr : mid + 15 * sr]
     sf.write(out_path, crop, sr, subtype="FLOAT")
     return out_path
+
 
 def extract_features(wav_path):
     """Extract audio features using Essentia."""
@@ -74,14 +73,22 @@ def extract_features(wav_path):
     feature_row.update({f"chroma_std_{i}": v for i, v in enumerate(chroma_std)})
     feature_row.update({f"mfcc_mean_{i}": v for i, v in enumerate(mfcc_mean)})
     feature_row.update({f"mfcc_std_{i}": v for i, v in enumerate(mfcc_std)})
-    feature_row.update({
-        "spectral_centroid": sc, "spectral_rolloff": sr,
-        "spectral_flux": flux, "zero_crossing": zc,
-        "rms_mean": rms_mean, "rms_std": rms_std,
-        "rms_25": rms_25, "rms_50": rms_50, "rms_75": rms_75
-    })
+    feature_row.update(
+        {
+            "spectral_centroid": sc,
+            "spectral_rolloff": sr,
+            "spectral_flux": flux,
+            "zero_crossing": zc,
+            "rms_mean": rms_mean,
+            "rms_std": rms_std,
+            "rms_25": rms_25,
+            "rms_50": rms_50,
+            "rms_75": rms_75,
+        }
+    )
 
     return feature_row
+
 
 def get_embedding(mp3_path):
     """Process MP3 to embedding vector."""
@@ -95,20 +102,24 @@ def get_embedding(mp3_path):
     os.remove(temp_wav)
     return emb_norm[0]
 
+
 def query_similar(embedding, top_k=5):
     """Query similar embeddings from pgvector DB."""
-    emb_str = '[' + ','.join(map(str, embedding)) + ']'
+    emb_str = "[" + ",".join(map(str, embedding)) + "]"
     conn = psycopg2.connect(dsn=DATABASE_URL)
     cur = conn.cursor()
 
     # Time the query
     start = time.time()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT track_id, (embedding::vector <-> %s::vector) AS similarity
         FROM track_embedding
         ORDER BY embedding::vector <-> %s::vector
         LIMIT %s
-    """, (emb_str, emb_str, top_k))
+    """,
+        (emb_str, emb_str, top_k),
+    )
     results = cur.fetchall()
     end = time.time()
 
@@ -117,6 +128,7 @@ def query_similar(embedding, top_k=5):
 
     query_time = end - start
     return results, query_time
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
@@ -128,7 +140,7 @@ if __name__ == "__main__":
         print(f"Error: Folder '{folder_path}' not found.")
         sys.exit(1)
 
-    mp3_files = [f for f in os.listdir(folder_path) if f.lower().endswith('.mp3')]
+    mp3_files = [f for f in os.listdir(folder_path) if f.lower().endswith(".mp3")]
     if not mp3_files:
         print(f"No MP3 files found in '{folder_path}'.")
         sys.exit(1)
@@ -155,6 +167,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     import statistics
+
     mean_time = statistics.mean(query_times)
     median_time = statistics.median(query_times)
     std_dev = statistics.stdev(query_times) if len(query_times) > 1 else 0

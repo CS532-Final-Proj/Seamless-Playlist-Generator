@@ -53,14 +53,13 @@ services:
   model-api:
     image: spark-image
     deploy:
-      replicas: 2
+      replicas: 4
     entrypoint: ['./entrypoint.sh', 'inference']
     env_file:
       - spark.env
       - model.env
     volumes:
       - ./data:/opt/spark/data
-      - ./spark-logs:/opt/spark/spark-events
     networks:
       - music-match
   
