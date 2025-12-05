@@ -33,6 +33,7 @@ MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "embeddings")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
+STAGING = os.getenv("STAGING", "true").lower() == "true"
 TRACK_LIMIT = int(os.getenv("TRACK_LIMIT", "0"))  # 0 means no limit
 FEATURES_CACHE_PATH = os.getenv("FEATURES_CACHE_PATH", "data/features")
 FAILED_TRACKS_PATH = os.getenv("FAILED_TRACKS_PATH", "data/failed_tracks")
@@ -88,7 +89,7 @@ def process_partition_audio(iterator):
                 try:
                     # Extract (in child process)
                     future = pool.schedule(
-                        safe_extract_worker, args=[track_id, audio_path], timeout=60
+                        safe_extract_worker, args=[track_id, audio_path], timeout=240
                     )
 
                     try:
@@ -126,6 +127,7 @@ def init_database_pre_load() -> bool:
     """
     Initialize PostgreSQL table: Create table, DROP index if exists to speed up insertion.
     """
+    table_name = "track_embeddings_staging" if STAGING else "track_embeddings"
     try:
         # Connect using psycopg3
         with psycopg.connect(POSTGRES_URL) as conn:
@@ -135,9 +137,9 @@ def init_database_pre_load() -> bool:
                 cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
 
                 # Create table if not exists
-                print("   Creating track_embeddings table...")
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS track_embeddings (
+                print(f"   Creating {table_name} table...")
+                cur.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {table_name} (
                         track_id INTEGER PRIMARY KEY,
                         embedding vector(50) NOT NULL,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -145,8 +147,10 @@ def init_database_pre_load() -> bool:
                 """)
 
                 # Drop index to speed up bulk insert
-                print("   Dropping HNSW index (if exists) to speed up insertion...")
-                cur.execute("DROP INDEX IF EXISTS track_embeddings_embedding_idx;")
+                print(
+                    f"   Dropping HNSW index (if exists) to speed up insertion on {table_name}..."
+                )
+                cur.execute(f"DROP INDEX IF EXISTS {table_name}_embedding_idx;")
 
                 conn.commit()
         return True
@@ -160,13 +164,16 @@ def finalize_database_post_load() -> bool:
     """
     Create HNSW index after data insertion.
     """
+    table_name = "track_embeddings_staging" if STAGING else "track_embeddings"
     try:
         with psycopg.connect(POSTGRES_URL) as conn:
             with conn.cursor() as cur:
-                print("   Creating HNSW index for vector similarity search...")
-                cur.execute("""
-                    CREATE INDEX IF NOT EXISTS track_embeddings_embedding_idx
-                    ON track_embeddings
+                print(
+                    f"   Creating HNSW index for vector similarity search on {table_name}..."
+                )
+                cur.execute(f"""
+                    CREATE INDEX IF NOT EXISTS {table_name}_embedding_idx
+                    ON {table_name}
                     USING hnsw (embedding vector_cosine_ops);
                 """)
                 conn.commit()
@@ -246,11 +253,16 @@ def main():
 
     # 3. Calculate Delta
     if existing_features_df is not None:
+        # Identify tracks with no features (features is None)
+        failed_features_df = existing_features_df.filter(
+            col("features").isNull()
+        ).select("track_id")
+        # Union with tracks that are not present in existing features
         tracks_to_process_df = metadata_df.join(
             existing_features_df,
             metadata_df.track_id == existing_features_df.track_id,
             how="left_anti",
-        )
+        ).unionByName(failed_features_df)
     else:
         tracks_to_process_df = metadata_df
 
@@ -317,9 +329,9 @@ def main():
         success_df.write.mode("append").parquet(FEATURES_CACHE_PATH)
 
         # Write failure
-        failed_df = results_df.filter(col("error").isNotNull()).select(
-            "track_id", "error"
-        )
+        failed_df = results_df.filter(
+            (col("error").isNotNull()) | (col("features").isNull())
+        ).select("track_id", "error")
         if failed_df.count() > 0:
             failed_df.write.mode("append").parquet(FAILED_TRACKS_PATH)
 
@@ -400,7 +412,7 @@ def main():
 
     # Write to PostgreSQL if ready
     if postgres_ready:
-        print("\n[5/7] Writing embeddings to PostgreSQL...")
+        print("\n[5/7] Writing embeddings to PostgreSQL staging table...")
 
         jdbc_url = POSTGRES_URL.replace("postgresql://", "jdbc:postgresql://")
 
@@ -411,13 +423,13 @@ def main():
             # IMPORTANT: Specify stringtype=unspecified to allow Postgres to cast the string to vector
             result_df.select("track_id", col("embedding").cast("string")).write.format(
                 "jdbc"
-            ).option("url", jdbc_url).option("dbtable", "track_embeddings").option(
-                "driver", "org.postgresql.Driver"
-            ).option("truncate", "true").option("stringtype", "unspecified").mode(
-                "overwrite"
-            ).save()
+            ).option("url", jdbc_url).option(
+                "dbtable", "track_embeddings_staging" if STAGING else "track_embeddings"
+            ).option("driver", "org.postgresql.Driver").option(
+                "truncate", "true"
+            ).option("stringtype", "unspecified").mode("overwrite").save()
 
-            print("   [SUCCESS] Wrote embeddings to track_embeddings table")
+            print("   [SUCCESS] Wrote embeddings to track_embeddings_staging table")
 
             # Re-create index after bulk load
             finalize_database_post_load()

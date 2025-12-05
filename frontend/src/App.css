@@ -172,7 +172,173 @@ h1 {
 
 .track-audio {
   margin-left: 20px;
-  min-width: 180px;
+  min-width: 280px;
   display: flex;
   align-items: center;
+  gap: 12px;
+}
+
+.track-play-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 18px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+  min-width: 90px;
+  white-space: nowrap;
+}
+
+.track-play-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.35);
+}
+
+.track-seek-slider {
+  width: 100px;
+  height: 5px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #ddd;
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+.track-seek-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.track-seek-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+.track-seek-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+}
+
+.track-time-display {
+  font-size: 12px;
+  color: #666;
+  font-family: monospace;
+  min-width: 80px;
+}
+
+/* Uploaded file player section */
+.uploaded-file-player {
+  background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+  border: 2px solid #667eea40;
+  border-radius: 15px;
+  padding: 20px;
+  margin-bottom: 25px;
+}
+
+.uploaded-file-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.uploaded-file-icon {
+  font-size: 24px;
+  margin-right: 10px;
+}
+
+.uploaded-file-name {
+  font-weight: 600;
+  color: #333;
+  font-size: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.uploaded-file-controls {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+
+.uploaded-file-controls .play-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+  min-width: 100px;
+}
+
+.uploaded-file-controls .play-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+}
+
+.uploaded-file-controls .seek-slider {
+  flex: 1;
+  min-width: 150px;
+  max-width: 300px;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #ddd;
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+.uploaded-file-controls .seek-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.uploaded-file-controls .seek-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+.uploaded-file-controls .seek-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+}
+
+.uploaded-file-controls .time-display {
+  font-size: 13px;
+  color: #666;
+  font-family: monospace;
+  min-width: 90px;
+}
+
+/* Preview player variant (on upload screen) */
+.uploaded-file-player.preview-player {
+  margin-top: 20px;
+  margin-bottom: 20px;
 }

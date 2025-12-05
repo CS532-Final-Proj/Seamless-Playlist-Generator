@@ -12,6 +12,13 @@ function App() {
     if (file && file.type === 'audio/mpeg') {
       setSelectedFile(file)
       setError(null)
+      // Create object URL for playback
+      if (uploadedFileUrl) {
+        URL.revokeObjectURL(uploadedFileUrl)
+      }
+      setUploadedFileUrl(URL.createObjectURL(file))
+      setUploadedSeekTime(0)
+      setUploadedDuration(0)
     } else {
       setError('Please upload a valid MP3 file')
     }
@@ -55,6 +62,13 @@ function App() {
         if (data.status === 'completed') {
           setResults(data.results || [])
           setLoading(false)
+          // Reset uploaded file player state
+          setIsUploadedPlaying(false)
+          setUploadedSeekTime(0)
+          if (uploadedAudioRef.current) {
+            uploadedAudioRef.current.pause()
+            uploadedAudioRef.current.currentTime = 0
+          }
         } else if (data.status === 'failed') {
           throw new Error(data.error || 'Processing failed')
         } else if (data.status === 'processing') {
@@ -112,6 +126,13 @@ function App() {
     setSelectedFile(null)
     setResults(null)
     setError(null)
+    if (uploadedFileUrl) {
+      URL.revokeObjectURL(uploadedFileUrl)
+    }
+    setUploadedFileUrl(null)
+    setIsUploadedPlaying(false)
+    setUploadedSeekTime(0)
+    setUploadedDuration(0)
   }
 
   // Audio player state for single play and seek
@@ -119,8 +140,20 @@ function App() {
   const [seekTimes, setSeekTimes] = useState({});
   const audioRefs = useRef([]);
 
+  // Uploaded file audio player state
+  const [uploadedFileUrl, setUploadedFileUrl] = useState(null);
+  const [isUploadedPlaying, setIsUploadedPlaying] = useState(false);
+  const [uploadedSeekTime, setUploadedSeekTime] = useState(0);
+  const [uploadedDuration, setUploadedDuration] = useState(0);
+  const uploadedAudioRef = useRef(null);
+
   const handlePlay = (index) => {
-    // Pause all other audios
+    // Pause the uploaded file audio
+    if (uploadedAudioRef.current) {
+      uploadedAudioRef.current.pause();
+      setIsUploadedPlaying(false);
+    }
+    // Pause all other result track audios
     audioRefs.current.forEach((audio, i) => {
       if (audio && i !== index) {
         audio.pause();
@@ -157,6 +190,44 @@ function App() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // Uploaded file audio handlers
+  const handleUploadedPlay = () => {
+    // Pause all result track audios
+    audioRefs.current.forEach((audio) => {
+      if (audio) {
+        audio.pause();
+        audio.currentTime = 0;
+      }
+    });
+    setPlayingIndex(null);
+    setIsUploadedPlaying(true);
+    uploadedAudioRef.current?.play();
+  };
+
+  const handleUploadedPause = () => {
+    setIsUploadedPlaying(false);
+    uploadedAudioRef.current?.pause();
+  };
+
+  const handleUploadedSeek = (value) => {
+    if (uploadedAudioRef.current) {
+      uploadedAudioRef.current.currentTime = value;
+      setUploadedSeekTime(value);
+    }
+  };
+
+  const handleUploadedTimeUpdate = () => {
+    if (uploadedAudioRef.current) {
+      setUploadedSeekTime(uploadedAudioRef.current.currentTime);
+    }
+  };
+
+  const handleUploadedLoadedMetadata = () => {
+    if (uploadedAudioRef.current) {
+      setUploadedDuration(uploadedAudioRef.current.duration);
+    }
+  };
+
   if (loading) {
     return (
       <div className="container">
@@ -173,6 +244,43 @@ function App() {
     return (
       <div className="container">
         <h1>🎵 Similar Songs</h1>
+
+        {/* Uploaded file player section */}
+        {uploadedFileUrl && (
+          <div className="uploaded-file-player">
+            <div className="uploaded-file-header">
+              <span className="uploaded-file-icon">🎧</span>
+              <span className="uploaded-file-name">Your Upload: {selectedFile?.name}</span>
+            </div>
+            <div className="uploaded-file-controls">
+              <button
+                className="play-btn"
+                onClick={isUploadedPlaying ? handleUploadedPause : handleUploadedPlay}
+              >
+                {isUploadedPlaying ? '⏸️ Pause' : '▶️ Play'}
+              </button>
+              <input
+                type="range"
+                className="seek-slider"
+                min={0}
+                max={uploadedDuration || 0}
+                value={uploadedSeekTime}
+                onChange={(e) => handleUploadedSeek(Number(e.target.value))}
+              />
+              <span className="time-display">
+                {formatDuration(uploadedSeekTime)} / {formatDuration(uploadedDuration)}
+              </span>
+              <audio
+                ref={uploadedAudioRef}
+                src={uploadedFileUrl}
+                onTimeUpdate={handleUploadedTimeUpdate}
+                onLoadedMetadata={handleUploadedLoadedMetadata}
+                onEnded={() => setIsUploadedPlaying(false)}
+              />
+            </div>
+          </div>
+        )}
+
         <div className="results">
           {results.length === 0 ? (
             <p style={{ textAlign: 'center', color: '#666' }}>No similar tracks found</p>
@@ -189,14 +297,14 @@ function App() {
                 {track.audio_url && (
                   <div className="track-audio">
                     <button
+                      className="track-play-btn"
                       onClick={() =>
                         playingIndex === index
                           ? handlePause(index)
                           : handlePlay(index)
                       }
-                      style={{ marginRight: '10px' }}
                     >
-                      {playingIndex === index ? 'Pause' : 'Play'}
+                      {playingIndex === index ? '⏸️ Pause' : '▶️ Play'}
                     </button>
                     <audio
                       ref={(el) => (audioRefs.current[index] = el)}
@@ -207,13 +315,13 @@ function App() {
                     />
                     <input
                       type="range"
+                      className="track-seek-slider"
                       min={0}
                       max={audioRefs.current[index]?.duration || 0}
                       value={seekTimes[index] || 0}
                       onChange={(e) => handleSeek(index, Number(e.target.value))}
-                      style={{ width: '120px' }}
                     />
-                    <span style={{ marginLeft: '8px', fontSize: '12px', color: '#666' }}>
+                    <span className="track-time-display">
                       {formatDuration(seekTimes[index] || 0)} / {formatDuration(audioRefs.current[index]?.duration || 0)}
                     </span>
                   </div>
@@ -256,6 +364,42 @@ function App() {
       {selectedFile && (
         <div className="file-name">
           Selected: {selectedFile.name}
+        </div>
+      )}
+
+      {/* Preview player for uploaded file before submitting */}
+      {uploadedFileUrl && selectedFile && (
+        <div className="uploaded-file-player preview-player">
+          <div className="uploaded-file-header">
+            <span className="uploaded-file-icon">🎧</span>
+            <span className="uploaded-file-name">Preview: {selectedFile.name}</span>
+          </div>
+          <div className="uploaded-file-controls">
+            <button
+              className="play-btn"
+              onClick={isUploadedPlaying ? handleUploadedPause : handleUploadedPlay}
+            >
+              {isUploadedPlaying ? '⏸️ Pause' : '▶️ Play'}
+            </button>
+            <input
+              type="range"
+              className="seek-slider"
+              min={0}
+              max={uploadedDuration || 0}
+              value={uploadedSeekTime}
+              onChange={(e) => handleUploadedSeek(Number(e.target.value))}
+            />
+            <span className="time-display">
+              {formatDuration(uploadedSeekTime)} / {formatDuration(uploadedDuration)}
+            </span>
+            <audio
+              ref={uploadedAudioRef}
+              src={uploadedFileUrl}
+              onTimeUpdate={handleUploadedTimeUpdate}
+              onLoadedMetadata={handleUploadedLoadedMetadata}
+              onEnded={() => setIsUploadedPlaying(false)}
+            />
+          </div>
         </div>
       )}
 

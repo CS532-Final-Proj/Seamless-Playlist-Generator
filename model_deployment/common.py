@@ -163,14 +163,14 @@ def safe_extract_worker(track_id, mp3_path):
         y = loader()
 
         # Trim
-        sr = 22050
-        duration_samples = len(y)
-        target_samples = 30 * sr
-        if duration_samples > target_samples:
-            mid = duration_samples // 2
-            start = mid - (target_samples // 2)
-            end = start + target_samples
-            y = y[start:end]
+        # sr = 22050
+        # duration_samples = len(y)
+        # target_samples = 30 * sr
+        # if duration_samples > target_samples:
+        #     mid = duration_samples // 2
+        #     start = mid - (target_samples // 2)
+        #     end = start + target_samples
+        #     y = y[start:end]
 
         # Extract
         # Use the global algos initialized in this process

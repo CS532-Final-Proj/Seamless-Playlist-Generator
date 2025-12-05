@@ -4,14 +4,23 @@ import os
 import requests
 from psycopg_pool import ConnectionPool
 from worker import celery
+from celery.signals import worker_process_init
+
 
 S3_BUCKET = os.getenv("S3_BUCKET")
 INFERENCE_API_URL = os.getenv("INFERENCE_API_URL", "http://localhost:8000/predict")
 DATABASE_URL = os.getenv("POSTGRES_URL", "")
 
-pool = ConnectionPool(
-    conninfo=DATABASE_URL, min_size=1, max_size=10, kwargs={"prepare_threshold": 0}
-)
+pool = None
+
+
+@worker_process_init.connect
+def init_worker(**kwargs):
+    global pool
+    pool = ConnectionPool(
+        conninfo=DATABASE_URL, min_size=1, max_size=10, kwargs={"prepare_threshold": 0}
+    )
+    pool.open(True, timeout=4)
 
 
 @celery.task
@@ -36,6 +45,8 @@ def run_process_upload(upload_id: str):
         return {"status": "error", "message": str(e)}
 
     # Get similar tracks
+    print(f"Finding similar tracks for upload {upload_id}")
+
     similar_tracks = []
     try:
         emb_str = str(embedding)
