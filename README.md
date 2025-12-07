@@ -19,7 +19,7 @@ The project is built as a set of containerized microservices:
 - **Worker**: Celery workers handling background tasks, orchestrating the communication between storage, database, and inference services.
 - **Database**: PostgreSQL with `pgvector` extension for storing track metadata and high-dimensional vector embeddings.
 - **Inference Engine**: Apache Spark cluster for distributed model inference, served via an NGINX proxy.
-- **Storage**: MinIO (S3-compatible) for checking file existence (configured in backend).
+- **Storage**: Garage (S3-compatible) for checking file existence (configured in backend).
 - **Message Broker**: Valkey (Redis compatible) for task queue management.
 
 ## Prerequisites
